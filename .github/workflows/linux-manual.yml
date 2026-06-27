@@ -29,7 +29,7 @@ jobs:
         include:
           - { os: linux, arch: amd64, naive: true }
           - { os: linux, arch: arm64, naive: false }
-          - { os: linux, arch: mipsle, gomips: softfloat, naive: true }
+          - { os: linux, arch: mipsle, gomips: softfloat, naive: false }
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
