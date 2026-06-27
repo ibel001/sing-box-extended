@@ -129,8 +129,6 @@ jobs:
       - name: Set mtime
         run: |-
           TZ=UTC touch -t '197001010000' dist/sing-box
-      - name: Detect track
-        run: bash .github/detect_track.sh
       - name: Set version
         run: |-
           PKG_VERSION="${{ needs.calculate_version.outputs.version }}"
