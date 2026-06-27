@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/ntp"
@@ -100,6 +102,9 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 	if N.NeedHandshakeForWrite(instance) {
 		start = time.Now()
 	}
+
+	var instanceUsed uint32
+
 	req, err := http.NewRequest(http.MethodHead, link, nil)
 	if err != nil {
 		return
@@ -107,7 +112,15 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return instance, nil
+				if atomic.CompareAndSwapUint32(&instanceUsed, 0, 1) {
+					return instance, nil
+				}
+
+				host, reqPort, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				return detour.DialContext(ctx, network, M.ParseSocksaddrHostPortStr(host, reqPort))
 			},
 			TLSClientConfig: &tls.Config{
 				Time:    ntp.TimeFuncFromContext(ctx),
@@ -115,16 +128,30 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 			},
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			if len(via) >= 10 {
+				return E.New("stopped after 10 redirects")
+			}
+
+			if req.URL.Hostname() != via[0].URL.Hostname() {
+				return E.New("blocked redirect to external domain: ", req.URL.Hostname())
+			}
+
+			return nil
 		},
 		Timeout: C.TCPTimeout,
 	}
 	defer client.CloseIdleConnections()
+
 	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		return
 	}
 	resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return 0, E.New("HTTP status ", resp.Status)
+	}
+
 	if IsUnifiedDelayFromContext(ctx) {
 		second := time.Now()
 		resp, err = client.Do(req)
@@ -132,6 +159,11 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 			return
 		}
 		resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			return 0, E.New("HTTP status ", resp.Status)
+		}
+
 		start = second
 	}
 	t = uint16(time.Since(start) / time.Millisecond)
